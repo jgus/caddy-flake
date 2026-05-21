@@ -1,0 +1,41 @@
+name: Update plugins and nixpkgs
+
+on:
+  schedule:
+    - cron: '17 7 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Bump nixpkgs to latest unstable
+        run: nix flake update
+
+      - name: Bump plugin versions and re-validate vendor hash
+        run: nix run .#update-version
+
+      - name: Commit and push if anything changed
+        run: |
+          git add flake.lock pin.nix
+          if git diff --cached --quiet; then
+            echo "No changes."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "auto: update plugins / nixpkgs"
+          git push
