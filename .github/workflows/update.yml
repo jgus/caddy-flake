@@ -2,7 +2,7 @@ name: Update plugins and nixpkgs
 
 on:
   schedule:
-    - cron: '17 7 * * *'
+    - cron: '0 7 * * *'
   workflow_dispatch: {}
 
 permissions:
