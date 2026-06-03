@@ -4,9 +4,14 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    flake-lib = {
+      url = "github:jgus/flake-lib/v1";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.flake-utils.follows = "flake-utils";
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, flake-lib }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         # Single source of truth for the plugin list + combined vendor hash. Regenerate via `nix run .#update-version` from this directory.
@@ -24,10 +29,17 @@
           name = "update-version";
           text = ''exec ${./update-version.sh} "$@"'';
         };
+        # The vendor-hash-by-build-failure dance is shared via flake-lib; the bespoke
+        # plugin resolution stays in update-version.sh (a manifest-style source).
+        revalidate-hash = flake-lib.lib.mkRevalidateHash {
+          inherit pkgs;
+          buildAttr = "caddy";
+          hashField = "hash";
+        };
       in
       {
         packages = {
-          inherit caddy update-version;
+          inherit caddy update-version revalidate-hash;
           default = caddy;
         };
       });

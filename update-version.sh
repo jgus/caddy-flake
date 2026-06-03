@@ -1,8 +1,15 @@
-#!/usr/bin/env -S nix shell nixpkgs#bash nixpkgs#gh nixpkgs#jq nixpkgs#gnused nixpkgs#coreutils --command bash
+#!/usr/bin/env -S nix shell nixpkgs#bash nixpkgs#gh nixpkgs#jq nixpkgs#gnused nixpkgs#nix nixpkgs#coreutils --command bash
 
-# Bumps pin.nix to the latest GitHub release of each pinned Caddy plugin, then re-validates the combined vendor hash. Run from the flake root: `nix run .#update-version`.
+# Bumps pin.nix to the latest GitHub release/tag of each pinned Caddy plugin, then
+# re-validates the combined xcaddy vendor hash via flake-lib's shared `revalidate-hash`
+# (build → read nix's "got:" mismatch → rewrite the field → rebuild). Run from the flake
+# root: `nix run .#update-version`.
 #
-# Plugins are referenced by their full Go module path (e.g. github.com/caddy-dns/cloudflare). The combined hash is the `outputHash` of caddy's xcaddy-built source tree (see nixpkgs caddy/plugins.nix); it can drift any time a plugin version OR an underlying nixpkgs piece (xcaddy / go / caddy / transitive Go deps) moves, so we always re-validate: try the build with the current hash, and on mismatch extract the actual hash from nix's error and rewrite pin.nix. The build always runs against this flake's own pinned nixpkgs — consumers must NOT `follows` nixpkgs into us, or the hash will mismatch under their nixpkgs.
+# Plugin resolution is caddy-specific: a curated multi-component "manifest" source with no
+# single upstream version, so it can't use the generic update-version. The vendor-hash
+# dance, however, IS the shared build-failure strategy (flake-lib mkRevalidateHash).
+# The build always runs against this flake's own pinned nixpkgs — consumers must NOT
+# `follows` nixpkgs into us, or the hash will mismatch under their nixpkgs.
 
 set -euo pipefail
 
@@ -71,15 +78,6 @@ for entry in "${cur_plugins[@]}"; do
   new_plugins+=("${module}@${new_version}")
 done
 
-# Compare plugin lists (order-stable: same indexes).
-versions_changed=0
-for i in "${!cur_plugins[@]}"; do
-  if [[ "${cur_plugins[${i}]}" != "${new_plugins[${i}]}" ]]; then
-    versions_changed=1
-    break
-  fi
-done
-
 write_pin () {
   local hash_value="$1"
   {
@@ -98,35 +96,16 @@ write_pin () {
 # Stash the literal original pin so we can roll back on a non-hash-mismatch failure.
 original_pin=$(cat "${pin}")
 
-if (( versions_changed )); then
-  echo "Plugin versions changed; writing pin.nix and re-validating vendor hash..."
-else
-  echo "All plugins already at latest versions; re-validating vendor hash..."
-fi
-# Write the (possibly updated) plugin list with the existing hash. The build below will tell us whether that hash still matches, and the mismatch error gives us the right hash if it doesn't.
+# Write the (possibly updated) plugin list with the existing hash. revalidate-hash will
+# correct the hash if the plugin set OR an underlying nixpkgs/xcaddy/go piece moved.
 write_pin "${cur_hash}"
 
-echo "Building caddy..."
-set +e
-build_out=$(nix build --option post-build-hook "" \
-  "${FLAKE_ROOT}#caddy" --no-link 2>&1)
-build_exit=$?
-set -e
-
-if (( build_exit != 0 )); then
-  new_hash=$(printf '%s\n' "${build_out}" | sed -nE 's/.*got:[[:space:]]+(sha256-[A-Za-z0-9+/=]+).*/\1/p' | head -1)
-  if [[ -z "${new_hash}" ]]; then
-    echo "error: caddy build failed and it wasn't a hash mismatch:" >&2
-    printf '%s\n' "${build_out}" >&2
-    printf '%s' "${original_pin}" > "${pin}"
-    exit 1
-  fi
-  echo "  vendor hash drift: ${cur_hash:-<empty>} -> ${new_hash}"
-  write_pin "${new_hash}"
-
-  echo "Verifying caddy build..."
-  nix build --option post-build-hook "" \
-    "${FLAKE_ROOT}#caddy" --no-link
+# A non-hash build failure (e.g. a plugin version that doesn't compile) makes revalidate-hash
+# exit non-zero; roll the pin back so we don't leave a broken plugin set committed.
+if ! FLAKE_ROOT="${FLAKE_ROOT}" nix run --option post-build-hook "" "${FLAKE_ROOT}#revalidate-hash"; then
+  echo "error: revalidation/build failed; rolling back pin.nix." >&2
+  printf '%s' "${original_pin}" > "${pin}"
+  exit 1
 fi
 
 echo
