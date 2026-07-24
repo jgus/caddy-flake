@@ -5,5 +5,5 @@
     "github.com/mholt/caddy-ratelimit@v0.1.0"
     "github.com/caddyserver/cache-handler@v0.16.0"
   ];
-  hash = "sha256-qBUCZQk74tWtwJheXmVkY4W38wOQqPJ+Ax1q0+UznW8=";
+  hash = "sha256-sQh+S+fuKdO8D0XA78YmnEtMlizPQSqsg9O2HPts03s=";
 }
